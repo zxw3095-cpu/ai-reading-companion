@@ -26,6 +26,7 @@
     const url=typeof input==='string'?input:input.url;
     if(!url.includes('/api/companion/stream'))return originalFetch(input,init);
     let payload={};try{payload=JSON.parse(init.body||'{}')}catch{}
+    if(payload.suppressHistory)return originalFetch(input,init);
     const prompt=payload.prompt||'';const question=(prompt.split('当前任务：')[1]||'小说问题').split('\n')[0];
     const chapter=(prompt.match(/\n\n(.+?)全文：/)||[])[1]||'当前章节';
     const row={question,chapter,time:new Date().toLocaleString(),answer:''};

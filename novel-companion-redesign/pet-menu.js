@@ -17,7 +17,7 @@
  let lookupTimer;
  function saveLocalAnswer(question,answer,chapter,chapterIndex=null){try{const rows=JSON.parse(localStorage.getItem('xiaoyue-qa-history')||'[]');rows.unshift({question,answer,chapter,chapterIndex,time:new Date().toLocaleString()});localStorage.setItem('xiaoyue-qa-history',JSON.stringify(rows.slice(0,50)));rememberTurn(question,answer,chapterIndex);window.dispatchEvent(new Event('xiaoyue:qa-saved'))}catch{}}
  function locateBookChapters(question,chapters){
-   const core=question.toLocaleLowerCase().replace(/(?:请问|告诉我|我想知道|这本书|小说|找到|找出|查找|搜索|检索|定位|在哪一章|在哪章|哪一章|那一章|哪个章节|第几章|在哪一回|哪一回|那一回|哪回|第几回|发生在哪|提到|出现在哪|章节|的|吗|呢|？|\?|\s)/g,'');
+   const core=question.toLocaleLowerCase().replace(/(?:请问|告诉我|我想知道|这本书|小说|找到|找出|查找|搜索|检索|定位|在哪一章|在哪章|哪一章|那一章|哪个章节|第几章|在哪一回|哪一回|那一回|哪回|第几回|发生在哪|提到|出现在哪|章节|讲了什么|发生了什么|主要内容|总结|概括|被压在|压在|的|吗|呢|？|\?|\s)/g,'');
    const grams=[];for(const length of [4,3,2])for(let i=0;i<=core.length-length;i++){const term=core.slice(i,i+length);if(!grams.includes(term))grams.push(term)}
    if(/孙悟空|悟空/.test(core))for(const alias of ['大圣','齐天大圣'])if(!grams.includes(alias))grams.push(alias);
    const frequency=new Map(grams.map(term=>[term,chapters.reduce((count,chapter)=>count+((chapter.title+'\n'+chapter.text).toLocaleLowerCase().includes(term)?1:0),0)]));
@@ -28,6 +28,9 @@
  }
  function isChapterLookup(question){return /哪.{0,3}(?:一章|一回|章|回)|第几(?:章|回)|哪个章节|(?:找到|找出|查找|搜索|检索|定位|找|查).{0,18}(?:章节|章|回)/.test(question)||(/(?:孙悟空|悟空|大圣)/.test(question)&&/五行山/.test(question)&&/(?:哪|那|找|查|检索|第几|一章|章节)/.test(question))}
  function isChapterFollowup(question){return /(?:那|这)(?:一章|一回|章|回)|刚才(?:说|提到|找到)的?(?:章节|那一章|那一回)|上一条回答/.test(question)}
+ function parseChineseNumber(value){const digits={'零':0,'〇':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};if(/^\d+$/.test(value))return Number(value);let total=0,section=0,number=0;for(const char of value){if(char in digits){number=digits[char];continue}const unit=char==='十'?10:char==='百'?100:char==='千'?1000:char==='万'?10000:0;if(!unit)continue;if(unit===10000){section=(section+number||1)*unit;total+=section;section=0;number=0;continue}section+=(number||(unit===10?1:0))*unit;number=0}return total+section+number}
+ function chapterOrdinal(question){const match=question.match(/第\s*([\d零〇一二两三四五六七八九十百千万]+)\s*(?:章|回)/);return match?parseChineseNumber(match[1]):null}
+ function chapterReference(question,chapters,currentIndex){if(/(?:上一章|前一章|上章|前章|上一回|前一回|上回|前回)/.test(question))return currentIndex-1;const ordinal=chapterOrdinal(question);if(ordinal!==null)return ordinal-1;if(/(?:当前|本|这)(?:一章|章|一回|回)/.test(question))return currentIndex;if(isChapterFollowup(question))return previousChapterReference(question,chapters);return null}
  function locateQuestion(question,chapters){
    if(/(?:孙悟空|悟空|大圣)/.test(question)&&/五行山/.test(question)){const index=chapters.findIndex(item=>/五行山/.test(item.title)&&/(?:大圣|悟空|孙悟空)/.test(item.title));if(index>=0)return[{chapter:chapters[index],index,score:100,matched:['五行山','大圣']}]}
    return locateBookChapters(question,chapters);
@@ -35,8 +38,8 @@
  function previousChapterReference(question,chapters){
    if(!isChapterFollowup(question))return null;
    let turns=[];try{turns=JSON.parse(localStorage.getItem(`xiaoyue-conversation:${window.__xiaoyueBookId||'sample-book'}`)||'[]')}catch{}
-   const remembered=turns.slice().reverse().find(row=>Number.isInteger(row.chapterIndex)&&row.chapterIndex>=0&&row.chapterIndex<chapters.length);
-   if(remembered)return remembered.chapterIndex;
+   const remembered=turns.at(-1);
+   if(remembered)return Number.isInteger(remembered.chapterIndex)&&remembered.chapterIndex>=0&&remembered.chapterIndex<chapters.length?remembered.chapterIndex:null;
    let qa=[];try{qa=JSON.parse(localStorage.getItem('xiaoyue-qa-history')||'[]')}catch{}
    const locator=qa.find(row=>isChapterLookup(row.question));
    if(!locator)return null;
@@ -46,6 +49,12 @@
  }
  function rememberTurn(question,answer,chapterIndex){try{const key=`xiaoyue-conversation:${window.__xiaoyueBookId||'sample-book'}`;const turns=JSON.parse(localStorage.getItem(key)||'[]');turns.push({question,answer,chapterIndex,time:Date.now()});localStorage.setItem(key,JSON.stringify(turns.slice(-8)))}catch{}}
  function recentConversation(){try{return JSON.parse(localStorage.getItem(`xiaoyue-conversation:${window.__xiaoyueBookId||'sample-book'}`)||'[]').slice(-3).map(row=>`读者：${String(row.question||'').slice(0,220)}\n小阅：${String(row.answer||'').slice(0,420)}`).join('\n')}catch{return''}}
+ function shortHash(value){let hash=2166136261;for(let i=0;i<value.length;i++){hash^=value.charCodeAt(i);hash=Math.imul(hash,16777619)}return`${value.length}-${(hash>>>0).toString(16)}`}
+ function summaryCacheKey(chapterIndex,chapter){return`xiaoyue-summary:${shortHash(window.__xiaoyueBookId||'sample-book')}:${chapterIndex}:${shortHash(chapter)}`}
+ function splitChapter(text,maxLength=1800){const paragraphs=text.split(/\n\s*\n/).map(s=>s.trim()).filter(Boolean),chunks=[];let current='';for(const paragraph of paragraphs){const sentences=paragraph.match(/[^。！？!?]+[。！？!?]?/gu)||[paragraph];for(let sentence of sentences){sentence=sentence.trim();while(sentence.length>maxLength){if(current){chunks.push(current);current=''}chunks.push(sentence.slice(0,maxLength));sentence=sentence.slice(maxLength)}if(current&&current.length+sentence.length+1>maxLength){chunks.push(current);current=''}current+=`${current?'\n':''}${sentence}`}}if(current)chunks.push(current);return chunks.length?chunks:[text.slice(0,maxLength)]}
+ function cleanSummary(value){let text=value.replace(/^#{1,6}\s*/gm,'').replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/(?:“[^”]*”|「[^」]*」|『[^』]*』)/g,'').replace(/对话(?:场景|总结|内容)[：:].*$/s,'');const parts=text.replace(/\s+/g,' ').split(/(?<=[。！？!?])/u).map(s=>s.trim()).filter(s=>/[。！？!?]$/.test(s)&&!/^.{1,12}[：:]/.test(s));const seen=new Set(),result=[];for(const part of parts){const key=part.replace(/[，。！？；：\s]/g,'');if(!key||seen.has(key))continue;const grams=new Set(key.match(/.{1,2}/gu)||[]);if(result.some(old=>{const prev=old.replace(/[，。！？；：\s]/g,'');const oldGrams=new Set(prev.match(/.{1,2}/gu)||[]);const overlap=[...grams].filter(x=>oldGrams.has(x)).length/Math.max(1,Math.min(grams.size,oldGrams.size));return overlap>.82}))continue;seen.add(key);result.push(part);if(result.length===5)break}return result.join('')}
+ async function requestCompletion(prompt,{summary=false,maxTokens=480,suppressHistory=false,showStream=true}={}){const response=await fetch('http://localhost:8787/api/companion/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,config,summary,maxTokens,suppressHistory})});if(!response.ok){let data={};try{data=await response.json()}catch{}throw new Error(typeof data?.error==='string'?data.error:data?.error?.message||`HTTP ${response.status}`)}if(!response.body)throw new Error('浏览器未提供流式响应读取能力');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',answer='';function readEvent(event){const line=event.split(/\r?\n/).find(x=>x.startsWith('data:'));if(!line)return;const raw=line.slice(5).trim();if(raw==='[DONE]')return;const data=JSON.parse(raw);if(data.error)throw new Error(data.error);const part=data.choices?.[0]?.delta?.content||data.choices?.[0]?.message?.content||'';if(part){answer+=part;if(showStream)reply.textContent=answer}}while(true){const {value,done}=await reader.read();buffer+=decoder.decode(value||new Uint8Array(),{stream:!done});const events=buffer.split(/\r?\n\r?\n/);buffer=events.pop()||'';for(const event of events)readEvent(event);if(done)break}if(buffer.trim())readEvent(buffer);return answer}
+ async function summarizeChapter(question,chapter,chapterLabel,chapterIndex){const key=summaryCacheKey(chapterIndex,chapter);try{const cached=localStorage.getItem(key);if(cached){show(cached);saveLocalAnswer(question,cached,chapterLabel,chapterIndex);return}}catch{}const chunks=splitChapter(chapter);const notes=[];for(let i=0;i<chunks.length;i++){show(chunks.length>1?`正在梳理${chapterLabel}（第 ${i+1}/${chunks.length} 段）…`:`正在梳理${chapterLabel}…`);const prompt=`你是严谨的小说章节梗概整理助手。只依据下面这一段原文，写1到2句客观、完整的事件摘要。保留人物名和事件结果；不写对白、不续写、不猜测，也不要把段落开头复述成标题。\n段落：\n${chunks[i]}`;notes.push((await requestCompletion(prompt,{summary:true,maxTokens:120,suppressHistory:true,showStream:false})).trim())}show(`正在合并${chapterLabel}的事件…`);const finalPrompt=`请把同一章节按原文顺序的段落摘要整合成3到5句中文梗概。只写本章确实发生的主要事件、关键人物行动和结果；删除重复信息，不新增因果、对白、人物或后续剧情。旁观者叙述，句子完整，以句号收尾。\n章节：${chapterLabel}\n段落摘要：\n${notes.map((note,i)=>`${i+1}. ${note}`).join('\n')}`;const raw=await requestCompletion(finalPrompt,{summary:true,maxTokens:260,suppressHistory:true});const answer=cleanSummary(raw)||cleanSummary(notes.join(''))||'本章梗概暂时无法整理，请稍后重试。';try{localStorage.setItem(key,answer)}catch{}show(answer);saveLocalAnswer(question,answer,chapterLabel,chapterIndex)}
  function streamLookup(question,answer,chapter,chapterIndex=null){clearInterval(lookupTimer);reply.textContent='';floating.classList.remove('closed');floating.classList.add('open');document.getElementById('launcher').classList.remove('show');let shown=0;lookupTimer=setInterval(()=>{shown=Math.min(answer.length,shown+7);reply.textContent=answer.slice(0,shown);if(shown>=answer.length){clearInterval(lookupTimer);saveLocalAnswer(question,answer,chapter,chapterIndex)}},22)}
  let bubbleDrag=null;
  bubbleHandle.style.cursor='grab';bubbleHandle.style.userSelect='none';
@@ -55,49 +64,36 @@
  bubbleHandle.addEventListener('pointerup',endBubbleDrag);bubbleHandle.addEventListener('pointercancel',endBubbleDrag);
  async function ask(question,mode='chapter'){
    bubbleHandle.textContent='\u5c0f\u9605\u3000\u00b7\u3000'+question;bubbleHandle.title=question;
-   let chapter=(story.innerText||story.textContent||'').trim();
-   let chapterLabel='当前章节';
    const book=window.__xiaoyueChapters||[];
    const currentIndex=window.__xiaoyueCurrentChapter??0;
+   let chapter=book[currentIndex]?.text||(story.innerText||story.textContent||'').trim();
+   let chapterLabel=book[currentIndex]?`第 ${currentIndex+1} 章《${book[currentIndex].title}》`:'当前章节';
    let contextChapterIndex=currentIndex;
    if(isChapterLookup(question)){
      show('正在检索整本已导入小说…');
      if(!book.length){const answer='请先导入整本小说 TXT，我才能搜索各章节并定位这段内容。';streamLookup(question,answer,'整本检索');return}
      const matches=locateQuestion(question,book);
      if(!matches.length){const answer='我在当前导入的章节里没有搜到足够匹配的原文，暂时无法确认是哪一章。';streamLookup(question,answer,'整本检索');return}
-     const answer=matches.map(row=>{const paras=row.chapter.text.split(/\n\s*\n/).map(text=>text.trim()).filter(Boolean);const terms=row.matched.slice().sort((a,b)=>b.length-a.length);const paragraph=paras.find(text=>terms.some(term=>text.toLocaleLowerCase().includes(term)))||row.chapter.title;const excerpt=paragraph.replace(/\s+/g,' ').slice(0,105);return`第 ${row.index+1} 章《${row.chapter.title}》${matches.length>1?'：':''}${matches.length>1?`原文提到“${excerpt}${paragraph.length>105?'…':''}”。`: `原文提到：“${excerpt}${paragraph.length>105?'…':''}”。`}`}).join('\n');
-     streamLookup(question,answer,'整本检索',matches[0].index);return;
+     const ambiguous=matches.length>1&&matches[1].score>=matches[0].score*.86;
+     const candidates=ambiguous?matches.filter(row=>row.score>=matches[0].score*.86).slice(0,3):matches.slice(0,1);
+     const answer=(ambiguous?'我找到几处相近线索，暂时不能只凭这些关键词确定唯一章节：\n':'')+candidates.map(row=>{const paras=row.chapter.text.split(/\n\s*\n/).map(text=>text.trim()).filter(Boolean);const terms=row.matched.slice().sort((a,b)=>b.length-a.length);const paragraph=paras.find(text=>terms.some(term=>text.toLocaleLowerCase().includes(term)))||row.chapter.title;const excerpt=paragraph.replace(/\s+/g,' ').slice(0,105);return`第 ${row.index+1} 章《${row.chapter.title}》原文提到：“${excerpt}${paragraph.length>105?'…':''}。”`}).join('\n');
+     streamLookup(question,answer,'整本检索',ambiguous?null:matches[0].index);return;
    }
-   const referencedIndex=previousChapterReference(question,book);
-   if(referencedIndex!==null&&book[referencedIndex]){contextChapterIndex=referencedIndex;chapter=book[referencedIndex].text;chapterLabel=`第 ${referencedIndex+1} 章（${book[referencedIndex].title}）`;}
+   const referencedIndex=chapterReference(question,book,currentIndex);
+   if(referencedIndex!==null){if(referencedIndex<0||referencedIndex>=book.length){show(`这本书当前导入了 ${book.length||1} 章，找不到对应的章节。`);return}contextChapterIndex=referencedIndex;chapter=book[referencedIndex].text;chapterLabel=`第 ${referencedIndex+1} 章《${book[referencedIndex].title}》`;}
    else if(isChapterFollowup(question)){show('我没找到上一问对应的章节。请先问“这段在哪一章”，或直接告诉我章节名。');return}
-   if(/上一章|前一章|上章|前章|刚才那章/.test(question)){
-     if(currentIndex>0&&book[currentIndex-1]){contextChapterIndex=currentIndex-1;chapter=book[currentIndex-1].text;chapterLabel=`上一章（${book[currentIndex-1].title}）`;}
-     else{show('当前已经是导入内容的第一章，没有更早的章节可回顾。');return;}
-   }
    if(!chapter){show('先导入一本 TXT 小说，我就能根据内容回答。');return}
    const selected=window.getSelection()?.toString().trim()||'';
    const isSummary=/总结|概括|大概讲|讲了什么|主要内容|内容梗概|章节梗概|情节梗概|回顾|发生了什么|剧情/.test(question);
+   if(isSummary){try{await summarizeChapter(question,chapter,chapterLabel,contextChapterIndex)}catch(error){show(`没能整理${chapterLabel}：${error instanceof Error?error.message:String(error)}。请确认 Ollama 和本地代理正在运行。`)}return}
    const excerpt=mode==='local'&&selected?`\n读者选中的句子：${selected}`:'';
-   const rules=isSummary?'这是章节梗概，不是续写或角色扮演。仅用旁观者口吻写2到3句，概括本章发生了什么、主要人物做了什么、结果如何。不要写对白、对话场景、人物台词或冒号引语；不要重复事件，总长不超过120字。':'回答读者的问题，不要复述问题或重复事实；最多4句话。';
+   const rules='回答读者的问题，不要复述问题或重复事实；最多4句话。';
    const memory=recentConversation();
-   const prompt=`你是小说伴读伙伴小阅。请用简体中文，只依据提供的章节文本回答；禁止引用未提供章节或编造情节。${rules}每句话必须完整结束并加句末标点。不要输出Markdown标题、加粗符号或问答脚本。${memory?`\n最近对话只用于理解指代：\n${memory}`:''}\n当前任务：${question}${excerpt}\n\n${chapterLabel}全文：\n${chapter}`;
+   const prompt=`你是小说伴读伙伴小阅。请用简体中文，只依据提供的目标章节文本回答；禁止引用其它章节或编造情节。${rules}每句话必须完整结束并加句末标点。不要输出Markdown标题、加粗符号或问答脚本。${memory?`\n最近对话只用于理解指代：\n${memory}`:''}\n当前任务：${question}${excerpt}\n\n${chapterLabel}全文：\n${chapter}`;
    show(`正在根据${chapterLabel}整理回答…`);
    try{
-     const response=await fetch('http://localhost:8787/api/companion/stream',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,config,summary:isSummary,maxTokens:isSummary?220:480})});
-     if(!response.ok){let data={};try{data=await response.json()}catch{}throw new Error(typeof data?.error==='string'?data.error:data?.error?.message||`HTTP ${response.status}`)}
-     if(!response.body)throw new Error('浏览器未提供流式响应读取能力');
-     const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',answer='';
-     function readEvent(event){const line=event.split(/\r?\n/).find(x=>x.startsWith('data:'));if(!line)return;const raw=line.slice(5).trim();if(raw==='[DONE]')return;const data=JSON.parse(raw);if(data.error)throw new Error(data.error);const part=data.choices?.[0]?.delta?.content||data.choices?.[0]?.message?.content||'';if(part){answer+=part;reply.textContent=answer;}}
-     while(true){const {value,done}=await reader.read();buffer+=decoder.decode(value||new Uint8Array(),{stream:!done});const events=buffer.split(/\r?\n\r?\n/);buffer=events.pop()||'';for(const event of events)readEvent(event);if(done)break;}
-     if(buffer.trim())readEvent(buffer);
-     let cleaned=answer.replace(/^#{1,6}\s*/gm,'').replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').trim();
-     if(isSummary){
-       cleaned=cleaned.replace(/(?:“[^”]*”|「[^」]*」|『[^』]*』)/g,'').replace(/对话(?:场景|总结|内容)[：:].*$/s,'');
-       const sentences=cleaned.replace(/\s+/g,' ').split(/(?<=[。！？!?])/u).map(x=>x.trim()).filter(Boolean);
-       const seen=new Set();cleaned=sentences.filter(x=>{const key=x.replace(/[，。！？；：\s]/g,'');if(seen.has(key))return false;seen.add(key);return true}).slice(0,3).join('');
-     }
-     const finalAnswer=cleaned||'当前章节没有可用的梗概内容。';show(finalAnswer);rememberTurn(question,finalAnswer,contextChapterIndex);
+     const answer=await requestCompletion(prompt,{maxTokens:480});
+     const finalAnswer=answer.replace(/^#{1,6}\s*/gm,'').replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').trim()||'当前章节没有找到足够信息。';show(finalAnswer);rememberTurn(question,finalAnswer,contextChapterIndex);
    }catch(error){show(`没能连接本地模型：${error instanceof Error?error.message:String(error)}。请确认 Ollama 和本地代理正在运行。`)}
  }
  pet.addEventListener('contextmenu',e=>{e.preventDefault();openAt(e.clientX,e.clientY)});
